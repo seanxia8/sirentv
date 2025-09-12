@@ -10,7 +10,7 @@ from slar.utils import CSVLogger, get_device
 
 from .io import PLibDataLoader
 from .analysis import get_pred_target, log_pred_target
-from .sirentv import SirenTV
+from .core import SirenTV
 from .utils import CSVLogger, WandbLogger
 from . import utils
 
@@ -80,6 +80,8 @@ def train(cfg: str = None):
         cfg = yaml.safe_load(
             open(os.path.join(os.path.dirname(__file__), "../templates/bvis-4848.yaml"))
         )
+    else:
+        cfg = yaml.safe_load(open(cfg))
 
     # Initialize wandb
     wandb.init()
@@ -102,6 +104,8 @@ def train(cfg: str = None):
     net = SirenTV(cfg).to(DEVICE)
     # Init data loader
     dl = PLibDataLoader(cfg, device=DEVICE)
+    n_pmts = int(net.out_features[0])
+    n_tbins = int(net.out_features[1]/net.out_features[0])
 
     # Init optimizer, resuming if needed
     opt, sch, epoch = optimizer_factory(net.parameters(), cfg)
@@ -173,27 +177,39 @@ def train(cfg: str = None):
             iteration_ctr += 1
 
             # Input data prep
-            x = data["position"].contiguous()  # .to(DEVICE)
-            weights = data["weight"].contiguous().squeeze()  # .to(DEVICE)
-            target = data["target"].contiguous().squeeze()  # .to(DEVICE)
-            target_linear = data["value"].contiguous().squeeze()  # .to(DEVICE)
+            x = data["position"].contiguous().to(DEVICE)
+            weights = data["weight"].contiguous().squeeze().to(DEVICE)
+            target = data["target"].contiguous().squeeze().to(DEVICE)
+            target_linear = data["value"].contiguous().squeeze().to(DEVICE)
 
             twait = time.time() - twait
             # Running the model, compute the loss, back-prop gradients to optimize.
             ttrain = time.time()
             pred = net(x)
-
+            pred_linear = dl.inv_xform_vis(pred)
             loss = 0
             losses = []
             feature_ctr = 0
 
             # Compute loss for each output type (visibility + time)
             for idx, n_features in enumerate(net.out_features):
-                curr_loss = loss_fn_weights[idx] * loss_fns[idx](
-                    pred[:, feature_ctr : feature_ctr + n_features],
-                    target[:, feature_ctr : feature_ctr + n_features],
-                    weights[:, feature_ctr : feature_ctr + n_features],
-                )
+                if idx > 0 and loss_fns_str[idx] == "JSDivergenceLoss":
+                    if cfg['transform_vis'].get('sin_out'):
+                        curr_loss = loss_fn_weights[idx] * loss_fns[idx](
+                            pred_linear[:, feature_ctr: feature_ctr + n_features].view(-1, n_pmts, n_tbins),
+                            target_linear[:, feature_ctr: feature_ctr + n_features].view(-1, n_pmts, n_tbins),
+                        )
+                    else:
+                        curr_loss = loss_fn_weights[idx] * loss_fns[idx](
+                            pred[:, feature_ctr: feature_ctr + n_features].view(-1, n_pmts, n_tbins),
+                            target[:, feature_ctr: feature_ctr + n_features].view(-1, n_pmts, n_tbins),
+                        )
+                else:
+                    curr_loss = loss_fn_weights[idx] * loss_fns[idx](
+                        pred[:, feature_ctr : feature_ctr + n_features],
+                        target[:, feature_ctr : feature_ctr + n_features],
+                        weights[:, feature_ctr : feature_ctr + n_features],
+                    )
                 losses.append(curr_loss)
                 feature_ctr += n_features
             losses = torch.stack(losses)
@@ -224,7 +240,6 @@ def train(cfg: str = None):
             )
 
             # Step the logger
-            pred_linear = dl.inv_xform_vis(pred)
             logger.step(iteration_ctr, target_linear, pred_linear)
             twait = time.time()
 
@@ -259,8 +274,8 @@ def train(cfg: str = None):
     print("[train] Stopped training at iteration", iteration_ctr, "epochs", epoch_ctr)
     logger.write()
     pred, target = get_pred_target(dl, net)
-    log_pred_target(pred[:,48:], target[:,48:], name="timing_comparison")
-    log_pred_target(pred[:,:48], target[:,:48], name="visibility_comparison")
+    log_pred_target(pred[:,81:], target[:,81:], name="timing_comparison")
+    log_pred_target(pred[:,:81], target[:,:81], name="visibility_comparison")
 
     logger.close()
 
