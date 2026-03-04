@@ -1,6 +1,6 @@
 photonlib:
     #filepath: /sdf/data/neutrino/pubdata/lut/optical/waveform_map/batch02/consolidated/plib.h5
-    filepath: /sdf/data/neutrino/pubdata/lut/optical/consolidated/full_wvfm_plib_b03_uncompressed.h5
+    filepath: /sdf/data/neutrino/pubdata/lut/optical/consolidated/full_wvfm_plib_b03_uncompressed_fixed.h5
     lazy: True
     time_tick_size: 0.1 #ns
 physics:
@@ -22,8 +22,8 @@ model:
   # Optional: annealing for temperature (Gumbel)
   anneal:
     enabled: True
-    tau_start: 0.5
-    tau_end: 0.05
+    tau_start: 0.1
+    tau_end: 0.01
   output_scale:
       fix: True
 transform_vis:
@@ -35,7 +35,7 @@ data:
     n_photon: 15000000
     n_pmt: 81
     use_gradient_supervision: True  # Enable gradient precomputation
-    gradient_cache_file: /sdf/home/j/junjie/sdf-data/SIREN/gradients/branched_gradient_cache_20260208.pt  # Cache to avoid recomputation
+    gradient_cache_file: /sdf/home/j/junjie/sdf-data/SIREN/gradients/branched_gradient_cache_20260215_fixed.pt  # Cache to avoid recomputation
     weight:
       t:
         enable: false
@@ -46,9 +46,9 @@ data:
         factor: 5000.0
         threshold: 1.0e-08
     loader:
-      batch_size: 3072
+      batch_size: 2048
       drop_last: true
-      num_workers: 2
+      num_workers: 1
       pin_memory: true
       shuffle: true
 logger:
@@ -77,13 +77,20 @@ train:
     loss:
       - type: SmoothL1Loss
         key: t
+        mask_key: v_mask
         weight: 1.0
       - type: SmoothL1Loss
+        key: t0
+        mask_key: v_mask
+        weight: 0.01
+      - type: SmoothL1Loss
         key: v
+        mask_key: v_mask
         weight: 1.0
       - type: VisibilityGradient_SmoothL1Loss
-        key: v
-        weight: 0.01
+        key: grad_mags_transformed
+        mask_key: v_mask
+        weight: 0.1
         threshold: 1.0e-9
     regularization: null
     reduction: sum
